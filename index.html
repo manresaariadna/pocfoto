@@ -52,31 +52,37 @@
   fieldset{border:1px solid var(--paper-line);border-radius:8px;padding:4px 14px 14px;margin-top:16px;}
   legend{font-family:Georgia,serif;color:var(--forest);font-weight:700;font-size:14px;padding:0 6px;}
   .hidden{display:none !important;}
+  .cam{position:relative;width:100%;aspect-ratio:3/4;background:#111;border-radius:12px;overflow:hidden;margin-top:12px;}
+  .cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  .frame{position:absolute;left:6%;width:88%;aspect-ratio:1.586;top:50%;transform:translateY(-50%);border:3px solid #fff;border-radius:14px;box-shadow:0 0 0 9999px rgba(0,0,0,.45);}
+  .frame.ok{border-color:#7ED38F;}
+  .mrzzone{position:absolute;left:0;right:0;bottom:0;height:34%;border-top:2px dashed rgba(255,255,255,.8);display:flex;align-items:flex-start;justify-content:center;}
+  .mrzzone span{margin-top:-11px;}
+  .mrzzone span{color:#fff;font-size:12px;background:rgba(0,0,0,.45);padding:2px 8px;border-radius:10px;}
+  .scanstatus{margin-top:8px;font-size:13.5px;color:var(--forest);font-weight:600;text-align:center;}
+  label.btn{display:block;}
 </style>
 </head>
 <body>
 <div id="app">
   <div class="eyebrow">El Molí de Fornells · Prova de concepte</div>
   <h1>Omplir les dades amb una foto del document</h1>
-  <p class="muted">Fes una foto de la cara del document que té les línies amb símbols <strong>&lt;&lt;&lt;</strong>: el darrere del DNI o del NIE/TIE, o la pàgina de la foto del passaport. Si vols, afegeix una segona foto de l'altra cara. Les fotos es processen dins del mòbil: no s'envien ni es guarden enlloc.</p>
+  <p class="muted">Enfoca el document amb la càmera i les dades s'ompliran soles. El tipus de document (DNI, NIE/TIE o passaport de qualsevol país) es detecta automàticament. La imatge es processa dins del mòbil: no s'envia ni es guarda enlloc.</p>
 
-  <div class="card">
-    <h3>1. Fes les fotos</h3>
-    <div class="shots">
-      <div class="shot" data-slot="0">
-        <input type="file" accept="image/*" capture="environment">
-        <div class="t">Foto 1</div><div class="s">Cara amb les línies &lt;&lt;&lt;</div>
-      </div>
-      <div class="shot" data-slot="1">
-        <input type="file" accept="image/*" capture="environment">
-        <div class="t">Foto 2 <span style="font-weight:400">(opcional)</span></div><div class="s">L'altra cara</div>
-      </div>
+  <div class="card" id="scanCard">
+    <h3>1. Enfoca el document</h3>
+    <p class="muted" id="scanHelp">Obre la càmera i posa dins el marc la cara del document que té les línies <strong>&lt;&lt;&lt;</strong>: el darrere del DNI o del NIE/TIE, o la pàgina de la foto del passaport. Quan l'hagi llegit, el mòbil vibrarà i les dades s'ompliran soles.</p>
+    <div id="camBox" class="cam hidden">
+      <video id="video" playsinline muted autoplay></video>
+      <div id="frame" class="frame"><div class="mrzzone"><span>línies &lt;&lt;&lt; aquí</span></div></div>
     </div>
-    <p class="muted" style="margin-top:10px;">Consells: document sobre una superfície fosca, bona llum, sense reflexos, i que el document ocupi gairebé tota la foto.</p>
-    <button class="btn btn-primary" id="readBtn" disabled>Llegir el document</button>
+    <div id="scanStatus" class="scanstatus hidden"></div>
+    <button class="btn btn-primary" id="camBtn">Obrir la càmera</button>
+    <label class="btn btn-secondary" id="uploadLbl">O puja una foto del document<input type="file" id="fileInp" accept="image/*" hidden></label>
     <div class="progress hidden" id="progWrap"><div id="progBar"></div></div>
     <p class="muted" id="progTxt"></p>
     <div id="readMsg"></div>
+    <img id="shotPreview" class="hidden" alt="Captura" style="width:100%;border-radius:8px;margin-top:10px;">
   </div>
 
   <div class="card hidden" id="formCard">
@@ -316,32 +322,257 @@ function findMrz(text){
   return cands[0] || null;
 }
 
-/* ---------- Imatge ---------- */
+/* ---------- Imatge: retall, escala de grisos, contrast i blanc/negre ---------- */
+function newCanvas(w,h){ var c=document.createElement("canvas"); c.width=Math.max(1,Math.round(w)); c.height=Math.max(1,Math.round(h)); return c; }
+function cropScale(src, sx, sy, sw, sh, targetW){
+  var sc = targetW/sw;
+  var c = newCanvas(sw*sc, sh*sc);
+  var ctx = c.getContext("2d"); ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+function grayContrast(c){
+  var o = newCanvas(c.width, c.height), ctx = o.getContext("2d");
+  ctx.drawImage(c,0,0);
+  var d=ctx.getImageData(0,0,o.width,o.height), px=d.data, hist=new Array(256).fill(0), n=px.length/4;
+  for(var i=0;i<px.length;i+=4){ var g=(px[i]*0.299+px[i+1]*0.587+px[i+2]*0.114)|0; px[i]=g; hist[g]++; }
+  var lo=0,hi=255,acc=0; for(lo=0;lo<255;lo++){ acc+=hist[lo]; if(acc>n*0.01) break; }
+  acc=0; for(hi=255;hi>0;hi--){ acc+=hist[hi]; if(acc>n*0.01) break; }
+  var span=Math.max(1,hi-lo);
+  for(var j=0;j<px.length;j+=4){ var v=Math.max(0,Math.min(255,((px[j]-lo)*255/span)|0)); px[j]=px[j+1]=px[j+2]=v; }
+  ctx.putImageData(d,0,0);
+  o._hist = hist;
+  return o;
+}
+// Binarització local (llindar per zones): resisteix fons de colors i ombres
+function binarize(c){
+  var g = grayContrast(c), w=g.width, h=g.height, ctx=g.getContext("2d");
+  var d=ctx.getImageData(0,0,w,h), px=d.data;
+  var gray=new Float32Array(w*h); for(var i=0;i<w*h;i++) gray[i]=px[i*4];
+  var integ=new Float64Array((w+1)*(h+1));
+  for(var y=0;y<h;y++){ var row=0; for(var x=0;x<w;x++){ row+=gray[y*w+x]; integ[(y+1)*(w+1)+x+1]=integ[y*(w+1)+x+1]+row; } }
+  var r=Math.max(8, Math.round(Math.min(w,h)/14));
+  for(var y2=0;y2<h;y2++){
+    var y0=Math.max(0,y2-r), y1=Math.min(h-1,y2+r);
+    for(var x2=0;x2<w;x2++){
+      var x0=Math.max(0,x2-r), x1=Math.min(w-1,x2+r);
+      var cnt=(y1-y0+1)*(x1-x0+1);
+      var sum=integ[(y1+1)*(w+1)+x1+1]-integ[y0*(w+1)+x1+1]-integ[(y1+1)*(w+1)+x0]+integ[y0*(w+1)+x0];
+      var v = gray[y2*w+x2] < (sum/cnt)*0.86 ? 0 : 255;
+      var k=(y2*w+x2)*4; px[k]=px[k+1]=px[k+2]=v;
+    }
+  }
+  ctx.putImageData(d,0,0);
+  return g;
+}
 function loadImage(file){
   return new Promise(function(res,rej){
     var img=new Image(); img.onload=function(){ res(img); }; img.onerror=rej; img.src=URL.createObjectURL(file);
   });
 }
-function makeCanvas(img, rot, y0, y1, maxSide){
-  var w=img.naturalWidth, h=img.naturalHeight;
+function rotated(img, rot, maxSide){
+  var w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
   var rw = rot%180===0 ? w : h, rh = rot%180===0 ? h : w;
   var scale = Math.min(1, maxSide/Math.max(rw,rh));
-  var c=document.createElement("canvas"); c.width=Math.round(rw*scale); c.height=Math.round(rh*scale);
-  var ctx=c.getContext("2d");
+  var c=newCanvas(rw*scale, rh*scale), ctx=c.getContext("2d");
   ctx.translate(c.width/2,c.height/2); ctx.rotate(rot*Math.PI/180);
   ctx.drawImage(img,-w*scale/2,-h*scale/2,w*scale,h*scale);
-  var cy0=Math.round(c.height*y0), ch=Math.max(1,Math.round(c.height*(y1-y0)));
-  var o=document.createElement("canvas"); o.width=c.width; o.height=ch;
-  var octx=o.getContext("2d"); octx.drawImage(c,0,cy0,c.width,ch,0,0,c.width,ch);
-  // escala de grisos + estirament de contrast
-  var d=octx.getImageData(0,0,o.width,o.height), px=d.data, hist=new Array(256).fill(0), n=px.length/4;
-  for(var i=0;i<px.length;i+=4){ var g=(px[i]*0.299+px[i+1]*0.587+px[i+2]*0.114)|0; px[i]=g; hist[g]++; }
-  var lo=0,hi=255,acc=0; for(lo=0;lo<255;lo++){ acc+=hist[lo]; if(acc>n*0.02) break; }
-  acc=0; for(hi=255;hi>0;hi--){ acc+=hist[hi]; if(acc>n*0.02) break; }
-  var span=Math.max(1,hi-lo);
-  for(var j=0;j<px.length;j+=4){ var v=Math.max(0,Math.min(255,((px[j]-lo)*255/span)|0)); px[j]=px[j+1]=px[j+2]=v; }
-  octx.putImageData(d,0,0);
-  return o;
+  return c;
+}
+
+/* ---------- OCR ---------- */
+var mrzWorker=null, spaWorker=null, debugLog=[];
+function setProgress(p, txt){
+  $("progWrap").classList.remove("hidden");
+  $("progBar").style.width = Math.round(p*100)+"%";
+  if(txt!==undefined) $("progTxt").textContent = txt;
+}
+function hideProgress(){ $("progWrap").classList.add("hidden"); $("progTxt").textContent=""; }
+function getMrzWorker(){
+  if(mrzWorker) return Promise.resolve(mrzWorker);
+  return Tesseract.createWorker("ocrb_int", 1, { langPath: MRZ_LANG_PATH, gzip:false }).then(function(w){
+    mrzWorker = w;
+    return w.setParameters({ tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<", tessedit_pageseg_mode:"6" }).then(function(){ return w; });
+  });
+}
+function getSpaWorker(){
+  if(spaWorker) return Promise.resolve(spaWorker);
+  return Tesseract.createWorker("spa", 1).then(function(w){ spaWorker=w; return w; });
+}
+// Llegeix la zona MRZ d'una imatge ja retallada: prova escala de grisos i, si cal, blanc/negre
+function ocrMrz(canvas, label){
+  return getMrzWorker().then(function(w){
+    var variants = [["grisos", grayContrast(canvas)], ["blanc i negre", binarize(canvas)]];
+    var best=null, i=0;
+    function next(){
+      if(i>=variants.length || isReliable(best)) return Promise.resolve(best);
+      var v=variants[i++];
+      return w.recognize(v[1]).then(function(res){
+        var r = findMrz(res.data.text);
+        debugLog.push((label||"")+" ["+v[0]+"]: "+(r ? r.format+" "+r.docCode+" "+(r.issuer||"?")+" — "+score(r)+"/"+Object.keys(r.checks).length+" controls" : "sense línies <<<"));
+        if(r && (!best || score(r)>score(best))) best=r;
+        return next();
+      });
+    }
+    return next();
+  });
+}
+// Fiable = número de document i data de naixement correctes, i com a molt un control fallat
+function isReliable(r){
+  if(!isGood(r)) return false;
+  var total=Object.keys(r.checks).length;
+  return score(r) >= total-1 && r.checks["Lletra del DNI"]!==false && r.checks["Lletra del NIE"]!==false;
+}
+
+/* ---------- Càmera en directe amb lectura automàtica ---------- */
+var stream=null, scanning=false, scanTries=0, busy=false;
+function openCamera(){
+  $("readMsg").innerHTML="";
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    $("readMsg").innerHTML='<div class="error">Aquest navegador no permet obrir la càmera des de la pàgina. Fes servir «Puja una foto».</div>';
+    return;
+  }
+  $("camBtn").disabled=true; $("camBtn").textContent="Obrint la càmera…";
+  navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080} }, audio:false })
+  .then(function(s){
+    stream=s;
+    var v=$("video"); v.srcObject=s;
+    $("camBox").classList.remove("hidden"); $("scanStatus").classList.remove("hidden");
+    $("frame").classList.remove("ok");
+    $("camBtn").disabled=false; $("camBtn").textContent="Tancar la càmera";
+    $("shotPreview").classList.add("hidden");
+    status("Preparant el lector…");
+    return v.play().catch(function(){}).then(getMrzWorker);
+  }).then(function(){
+    if(!stream) return;
+    scanning=true; scanTries=0; debugLog=[];
+    status("Posa el document dins el marc…");
+    setTimeout(scanStep, 400);
+  }).catch(function(e){
+    $("camBtn").disabled=false; $("camBtn").textContent="Obrir la càmera";
+    $("readMsg").innerHTML='<div class="error">No s\'ha pogut obrir la càmera ('+esc(e && (e.name||e.message) || e)+'). Comprova que has donat permís a la càmera, o fes servir «Puja una foto».</div>';
+  });
+}
+function closeCamera(){
+  scanning=false;
+  if(stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream=null; }
+  $("camBox").classList.add("hidden"); $("scanStatus").classList.add("hidden");
+  $("camBtn").disabled=false; $("camBtn").textContent="Obrir la càmera";
+}
+function status(t){ $("scanStatus").textContent=t; }
+// Retalla del vídeo exactament la zona del marc (amb un petit marge)
+function grabFrame(){
+  var v=$("video"), vw=v.videoWidth, vh=v.videoHeight;
+  if(!vw || !vh) return null;
+  var box=$("camBox").getBoundingClientRect(), fr=$("frame").getBoundingClientRect();
+  var scale=Math.max(box.width/vw, box.height/vh);
+  var ox=(box.width-vw*scale)/2, oy=(box.height-vh*scale)/2;
+  var x=(fr.left-box.left-ox)/scale, y=(fr.top-box.top-oy)/scale, w=fr.width/scale, h=fr.height/scale;
+  x-=w*0.04; y-=h*0.06; w*=1.08; h*=1.12;
+  x=Math.max(0,x); y=Math.max(0,y); w=Math.min(vw-x,w); h=Math.min(vh-y,h);
+  return cropScale(v, x, y, w, h, Math.min(1600, Math.max(1000, w)));
+}
+function scanStep(){
+  if(!scanning || busy) return;
+  var full = grabFrame();
+  if(!full){ setTimeout(scanStep, 300); return; }
+  busy=true; scanTries++;
+  // la zona de les línies <<< és el terç inferior del marc
+  var mrz = cropScale(full, 0, full.height*0.56, full.width, full.height*0.44, 1500);
+  ocrMrz(mrz, "Càmera, intent "+scanTries).then(function(r){
+    busy=false;
+    if(!scanning) return;
+    if(isReliable(r)){
+      scanning=false;
+      $("frame").classList.add("ok");
+      if(navigator.vibrate) navigator.vibrate(180);
+      status("Document llegit ✓");
+      var preview = full.toDataURL("image/jpeg",0.7);
+      closeCamera();
+      $("shotPreview").src=preview; $("shotPreview").classList.remove("hidden");
+      completeRead(r, [full], true);
+      return;
+    }
+    if(r) status("Gairebé… mantén el document quiet i ben il·luminat");
+    else if(scanTries>12) status("No trobo les línies <<<. Acosta el document, evita reflexos i posa les línies dins la zona marcada.");
+    else status("Buscant les línies <<<…");
+    setTimeout(scanStep, 120);
+  }).catch(function(e){
+    busy=false;
+    $("readMsg").innerHTML='<div class="error">Error del lector ('+esc(e && e.message || e)+'). Comprova la connexió a internet: la primera vegada cal descarregar el lector.</div>';
+    closeCamera();
+  });
+}
+
+/* ---------- Foto pujada (alternativa) ---------- */
+function readUploaded(file){
+  closeCamera(); debugLog=[];
+  $("readMsg").innerHTML="";
+  $("shotPreview").src=URL.createObjectURL(file); $("shotPreview").classList.remove("hidden");
+  setProgress(0.05, "Preparant el lector…");
+  var img;
+  loadImage(file).then(function(i){ img=i; return getMrzWorker(); }).then(function(){
+    var attempts=[[0,0.5],[0,0],[90,0],[270,0],[180,0.5]], best=null, k=0, fulls={};
+    function next(){
+      if(k>=attempts.length || isReliable(best)) return Promise.resolve(best);
+      var a=attempts[k++];
+      setProgress(0.1+0.6*(k/attempts.length), "Buscant les línies <<<…");
+      var rc = fulls[a[0]] || (fulls[a[0]] = rotated(img, a[0], 2000));
+      var zone = cropScale(rc, 0, rc.height*a[1], rc.width, rc.height*(1-a[1]), 1500);
+      return ocrMrz(zone, "Foto, rotació "+a[0]+"°, des del "+Math.round(a[1]*100)+"%").then(function(r){
+        if(r && (!best || score(r)>score(best))){ best=r; best._full=rc; }
+        return next();
+      });
+    }
+    return next();
+  }).then(function(r){
+    if(!r){
+      hideProgress();
+      $("readMsg").innerHTML='<div class="error">No s\'han trobat les línies &lt;&lt;&lt; a la foto. Prova amb la càmera en directe, que retalla el document automàticament, o omple les dades a mà.</div>';
+      showForm({}, null);
+      return;
+    }
+    completeRead(r, [r._full], false);
+  }).catch(function(e){
+    hideProgress();
+    $("readMsg").innerHTML='<div class="error">No s\'ha pogut llegir la foto ('+esc(e && e.message || e)+').</div>';
+  });
+}
+
+/* ---------- Resultat: adreça (DNI/NIE espanyol) i formulari ---------- */
+function completeRead(r, images, isCardCrop){
+  var t0=Date.now();
+  var fields = mrzToFields(r);
+  var done = function(){ hideProgress(); finish(r, fields); };
+  if(r.issuer==="ESP" && r.docCode[0]!=="P" && images[0]){
+    setProgress(0.8, "Llegint l'adreça del document…");
+    getSpaWorker().then(function(w){
+      var src = images[0];
+      // a la càmera tenim el document ja retallat: llegim la part de dalt (on hi ha el domicili) ampliada
+      var zone = isCardCrop ? cropScale(src, 0, 0, src.width, src.height*0.62, 2000) : src;
+      return w.recognize(grayContrast(zone));
+    }).then(function(o){
+      var a = extractAddress(o.data.text);
+      debugLog.push("Adreça: "+(a ? JSON.stringify(a.raw) : "no trobada. Text llegit: "+o.data.text.replace(/\s+/g," ").slice(0,160))+" ("+Math.round((Date.now()-t0)/1000)+" s)");
+      if(a){
+        if(a.adreca) fields.adreca=a.adreca;
+        if(a.provincia){ fields.provincia=a.provincia; fields.paisres="ESP"; }
+        if(a.municipiCode) fields.municipiCode=a.municipiCode;
+      }
+      done();
+    }).catch(function(){ done(); });
+  } else done();
+}
+function finish(r, fields){
+  var failed = Object.keys(r.checks).filter(function(k){ return !r.checks[k]; });
+  if(failed.length===0){
+    $("readMsg").innerHTML='<div class="success">Document llegit correctament: totes les comprovacions quadren.</div>';
+  } else if(isGood(r)){
+    $("readMsg").innerHTML='<div class="notice">Document llegit, però alguna comprovació no quadra ('+esc(failed.join(", "))+'). Revisa amb atenció les dades en groc.</div>';
+  } else {
+    $("readMsg").innerHTML='<div class="error">La lectura no és fiable ('+esc(failed.join(", "))+'). Torna-ho a provar o revisa totes les dades en groc.</div>';
+  }
+  showForm(fields, r);
 }
 
 /* ---------- Adreça (part de darrere del DNI) ---------- */
@@ -377,108 +608,6 @@ function extractAddress(text){
     return { adreca: (street||"").toUpperCase(), provincia: prov, municipiCode: muni, raw: [street, muniLine, provLine] };
   }
   return null;
-}
-
-/* ---------- OCR ---------- */
-var mrzWorker=null, spaWorker=null;
-function setProgress(p, txt){
-  $("progWrap").classList.remove("hidden");
-  $("progBar").style.width = Math.round(p*100)+"%";
-  if(txt!==undefined) $("progTxt").textContent = txt;
-}
-function getMrzWorker(){
-  if(mrzWorker) return Promise.resolve(mrzWorker);
-  return Tesseract.createWorker("ocrb_int", 1, { langPath: MRZ_LANG_PATH, gzip:false }).then(function(w){
-    mrzWorker = w;
-    return w.setParameters({ tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<", tessedit_pageseg_mode:"6" }).then(function(){ return w; });
-  });
-}
-function getSpaWorker(){
-  if(spaWorker) return Promise.resolve(spaWorker);
-  return Tesseract.createWorker("spa", 1).then(function(w){ spaWorker=w; return w; });
-}
-
-var photos=[null,null], debugLog=[];
-function readDocument(){
-  debugLog=[];
-  $("readMsg").innerHTML=""; $("readBtn").disabled=true;
-  var t0=Date.now();
-  var imgs=[];
-  setProgress(0.03, "Preparant el lector (la primera vegada pot trigar uns segons)…");
-  var files = photos.filter(Boolean);
-  Promise.all(files.map(loadImage)).then(function(list){
-    imgs=list;
-    return getMrzWorker();
-  }).then(function(worker){
-    var attempts=[];
-    imgs.forEach(function(img, idx){
-      [[0,0.45,1],[0,0,1],[90,0,1],[270,0,1],[180,0,1]].forEach(function(a){ attempts.push({img:img, idx:idx, rot:a[0], y0:a[1], y1:a[2]}); });
-    });
-    var best=null, bestIdx=-1, k=0;
-    function next(){
-      if(k>=attempts.length || isGood(best)) return Promise.resolve();
-      var at=attempts[k++];
-      setProgress(0.08+0.62*(k/attempts.length), "Buscant les línies <<< a la foto "+(at.idx+1)+"…");
-      var canvas = makeCanvas(at.img, at.rot, at.y0, at.y1, 1800);
-      return worker.recognize(canvas).then(function(res){
-        var r = findMrz(res.data.text);
-        debugLog.push("Foto "+(at.idx+1)+", rotació "+at.rot+"°, zona "+Math.round(at.y0*100)+"-"+Math.round(at.y1*100)+"%: "+(r ? r.format+" ("+score(r)+" controls correctes)" : "sense MRZ"));
-        if(r && (!best || score(r)>score(best))){ best=r; bestIdx=at.idx; }
-        return next();
-      });
-    }
-    return next().then(function(){ return {mrz:best, idx:bestIdx}; });
-  }).then(function(res){
-    var r=res.mrz;
-    if(!r){
-      setProgress(1,"");
-      $("readMsg").innerHTML='<div class="error">No s\'han trobat les línies &lt;&lt;&lt; del document. Torna a fer la foto amb més llum, sense reflexos i amb el document ocupant gairebé tota la imatge. També pots omplir les dades a mà.</div>';
-      showForm({}, null, null);
-      return;
-    }
-    var fields = mrzToFields(r);
-    if(r.issuer==="ESP" && r.docCode[0]!=="P"){
-      setProgress(0.75, "Llegint l'adreça del document…");
-      return getSpaWorker().then(function(w){
-        var chain=Promise.resolve(null);
-        imgs.forEach(function(img){
-          chain = chain.then(function(found){
-            if(found) return found;
-            return w.recognize(makeCanvas(img,0,0,1,2000)).then(function(o){
-              var a = extractAddress(o.data.text);
-              debugLog.push("Adreça: "+(a ? JSON.stringify(a.raw) : "no trobada"));
-              return a;
-            });
-          });
-        });
-        return chain;
-      }).then(function(addr){
-        if(addr){
-          if(addr.adreca) fields.adreca = addr.adreca;
-          if(addr.provincia){ fields.provincia = addr.provincia; fields.paisres="ESP"; }
-          if(addr.municipiCode) fields.municipiCode = addr.municipiCode;
-        }
-        finish(r, fields, t0);
-      });
-    }
-    finish(r, fields, t0);
-  }).catch(function(e){
-    setProgress(1,"");
-    $("readMsg").innerHTML='<div class="error">No s\'ha pogut llegir la foto ('+esc(e && e.message || e)+'). Comprova la connexió a internet: la primera vegada cal descarregar el lector.</div>';
-    $("readBtn").disabled=false;
-  });
-}
-function finish(r, fields, t0){
-  setProgress(1, "Lectura feta en "+Math.round((Date.now()-t0)/1000)+" s.");
-  var failed = Object.keys(r.checks).filter(function(k){ return !r.checks[k]; });
-  if(isGood(r) && failed.length===0){
-    $("readMsg").innerHTML='<div class="success">Document llegit correctament. Totes les comprovacions de la zona &lt;&lt;&lt; són correctes.</div>';
-  } else if(isGood(r)){
-    $("readMsg").innerHTML='<div class="notice">Document llegit, però alguna comprovació no quadra ('+esc(failed.join(", "))+'). Revisa amb atenció les dades en groc.</div>';
-  } else {
-    $("readMsg").innerHTML='<div class="error">La lectura no és fiable ('+esc(failed.join(", "))+'). Torna a fer la foto o revisa totes les dades en groc.</div>';
-  }
-  showForm(fields, r);
 }
 
 /* ---------- De la MRZ als camps del formulari ---------- */
@@ -544,7 +673,6 @@ function showForm(fields, r){
   }
   dbg += '<p><strong>Intents:</strong></p><pre>'+esc(debugLog.join("\n"))+'</pre>';
   $("debugBody").innerHTML = dbg;
-  $("readBtn").disabled = false;
   $("formCard").scrollIntoView({behavior:"smooth", block:"start"});
 }
 function checkData(){
@@ -588,27 +716,10 @@ $("f_tipdoc").addEventListener("change", syncForm);
 $("f_paisres").addEventListener("change", syncForm);
 FIELD_IDS.forEach(function(k){ var e=$("f_"+k); if(e) e.addEventListener("input", function(){ e.classList.remove("auto"); }); });
 $("checkBtn").addEventListener("click", checkData);
-$("readBtn").addEventListener("click", readDocument);
-
-document.querySelectorAll(".shot").forEach(function(sh){
-  var slot = +sh.getAttribute("data-slot"), inp = sh.querySelector("input");
-  var label = sh.innerHTML;
-  sh.addEventListener("click", function(e){ if(e.target.classList.contains("x") || e.target===inp) return; inp.click(); });
-  function bindInput(){
-    inp = sh.querySelector("input");
-    inp.addEventListener("change", function(){
-      var f = inp.files && inp.files[0]; if(!f) return;
-      photos[slot] = f;
-      var url = URL.createObjectURL(f);
-      sh.innerHTML = '<input type="file" accept="image/*" capture="environment"><img src="'+url+'" alt="Foto '+(slot+1)+'"><div class="s">Foto '+(slot+1)+' · toca per repetir</div><button type="button" class="x" aria-label="Treure">×</button>';
-      sh.querySelector(".x").addEventListener("click", function(ev){ ev.stopPropagation(); photos[slot]=null; sh.innerHTML = label; bindInput(); updateBtn(); });
-      bindInput();
-      updateBtn();
-    });
-  }
-  bindInput();
-});
-function updateBtn(){ $("readBtn").disabled = !photos.some(Boolean); }
+$("camBtn").addEventListener("click", function(){ if(stream) closeCamera(); else openCamera(); });
+$("fileInp").addEventListener("change", function(){ var f=this.files && this.files[0]; if(f) readUploaded(f); this.value=""; });
+// Precàrrega del lector en segon pla perquè la primera lectura sigui més ràpida
+setTimeout(function(){ getMrzWorker().catch(function(){}); }, 800);
 syncForm();
 })();
 </script>
